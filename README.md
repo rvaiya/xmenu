@@ -50,14 +50,4 @@ libxcb is the only dependency.
 
 # Bugs/Feature Requests
 
-Feel free to email r.vaiya@gmail.com with
-bugs or feature requests.
-
-# Known Limitations
-
- - XFT fonts are not supported.
- 
- - The number of supported items is limited by the height of the
-   screen (i.e no pagination).  Lists which contain more than the
-   maximum number of items will be truncated to the accommodable
-   number.
+Feel free to email r.vaiya@gmail.com with bugs or feature requests.

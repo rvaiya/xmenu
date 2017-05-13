@@ -59,7 +59,7 @@ struct geom text_geom(xcb_connection_t *con,
 
   dim.height = res->overall_ascent + res->overall_descent + 1; 
   dim.width = res->overall_width;
-  dim.yoffset = res->overall_ascent;
+  dim.yOffset = res->overall_ascent;
   free(res);
   return dim;
 }

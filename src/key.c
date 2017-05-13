@@ -10,6 +10,16 @@ struct key {
   xcb_keysym_t keysym;
 };
 
+struct mmap_ent {
+  const char *name;
+  uint32_t mask;
+  
+};
+
+struct mmap_ent modifier_map[] = {
+  { "C", 0x4 }
+};
+
 /* Returns a map between keycodes and kesyms  that can subsequently 
    be passed to lookup_keycode */
 
@@ -53,7 +63,7 @@ xcb_keysym_t lookup_keycode(struct keymap *keymap,
                             uint32_t modifiers) {
   int base;
   base = (code - keymap->start) * keymap->nkeysyms;
-  if(modifiers && keymap->map[base + 1])
+  if((modifiers & 0x1) && keymap->map[base + 1])
     return keymap->map[base + 1];
   
   return keymap->map[base];
@@ -102,9 +112,7 @@ static struct key keys[] = {
   { "Up", 0xff52 },
   { "Right", 0xff53 },
   { "Down", 0xff54 },
-  { "Prior", 0xff55 },
   { "Page_Up", 0xff55 },
-  { "Next", 0xff56 },
   { "Page_Down", 0xff56 },
   { "End", 0xff57 },
   { "Begin", 0xff58 },
@@ -2162,11 +2170,13 @@ static struct key keys[] = {
   { "Sinh_kunddaliya", 0x1000df4 },
 };
 
+/* Key loopup based on name. Result is stored in 'keysym', returns zero upon success. */
 int lookup_key(const char *name, xcb_keysym_t *keysym) {
   size_t i;
   for (i = 0; i < sizeof(keys)/sizeof(keys[0]); i++) {
     if(!strcmp(keys[i].name, name)) {
-      *keysym = keys[i].keysym;
+      if(keysym)
+        *keysym = keys[i].keysym;
       return 0;
     }
   }
@@ -2174,13 +2184,57 @@ int lookup_key(const char *name, xcb_keysym_t *keysym) {
   return -1;
 }
 
-const char *key_name(xcb_keysym_t sym) {
+static const char *_key_name(xcb_keysym_t sym) {
   size_t i;
   for (i = 0; i < sizeof(keys)/sizeof(keys[0]); i++) {
     if(sym == keys[i].keysym)
       return keys[i].name;
   }
   return NULL;
+}
+
+/* Returns 0 if name is a valid keyname. */
+int validate_key_name(const char *name) {
+  char *s = strstr(name, "-");
+  if(s && (name[1] != '-'))
+      return -1;
+
+  name = s ? s + 1 : name;
+  return lookup_key(name, NULL);
+}
+
+/* Caller is expected to free the result. Quite expensive, but good enough for use in the
+   main event loop. */
+
+const char *key_name(struct keymap *keymap, xcb_keycode_t keycode, uint16_t mode_mask) {
+  xcb_keysym_t sym = lookup_keycode(keymap, keycode, mode_mask);
+  const char *kname = _key_name(sym);
+  char *result;
+  size_t i;
+  
+  if(!kname)
+    return NULL;
+  
+  result = strdup(kname);
+  
+  if(strstr(kname, "Shift") ||
+     strstr(kname, "Super") ||
+     strstr(kname, "Meta") ||
+     strstr(kname, "Control"))
+    return NULL;
+  
+  for (i = 0; i < sizeof(modifier_map)/sizeof(modifier_map[0]); i++) {
+    /* TODO: Add support for multiple modifiers. */
+    if(modifier_map[i].mask & mode_mask) {
+      result = realloc(result, strlen(kname) + strlen(modifier_map[i].name) + 2);
+      strcpy(result, modifier_map[i].name);
+      strcat(result, "-");
+      strcat(result, kname);
+      break;
+    }
+  }
+  
+  return result;
 }
 
 void key_names(char ***lst, size_t *sz) {

@@ -5,18 +5,22 @@
 struct cfg {
   char *fgcol;
   char *bgcol;
+  char *sel_bgcol;
+  char *sel_fgcol;
   char *font;
   uint32_t padding;
   uint32_t spacing;
   uint32_t width;
-  xcb_keysym_t key_last;
-  xcb_keysym_t key_middle;
-  xcb_keysym_t key_home;
-  xcb_keysym_t key_down;
-  xcb_keysym_t key_up;
-  xcb_keysym_t key_quit;
-  xcb_keysym_t key_sel;
+  const char *key_last;
+  const char *key_middle;
+  const char *key_home;
+  const char *key_down;
+  const char *key_up;
+  const char *key_page_up;
+  const char *key_page_down;
+  const char *key_quit;
+  const char *key_sel;
 };
 
-struct cfg *get_cfg(const char *path);
+struct cfg *get_cfg(const char *path, const char *pname);
 #endif
