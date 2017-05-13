@@ -46,7 +46,10 @@ tweaked in accordance with the user's preference.
  
 # Dependencies
 
-libxcb is the only dependency.
+- libxcb
+- libXft
+- Xlib-xcb
+- Xlib
 
 # Bugs/Feature Requests
 
