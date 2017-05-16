@@ -57,6 +57,29 @@ void _die(const char *function, uint32_t line, char *fmt, ...) {
   exit(-1);
 }
 
+/* TODO make this UTF8 sensitive. */
+static void replace_tabs(char **oline) {
+  char *line;
+  int n = 0;
+  char *start;
+  line = *oline;
+  
+  while(*line++)
+    if(*line == '\t')
+      n++;
+  
+  start = realloc(*oline, strlen(*oline) + n * 4 + 1);
+  line = start;
+  while(*line++)
+    if(*line == '\t') {
+      memmove(line + 4, line + 1, strlen(line));
+      memset(line, ' ', 4);
+    }
+  
+  *oline = start;
+}
+
+
 static xcb_gcontext_t rectgc(const char *color) {
   uint32_t col;
   
@@ -121,7 +144,6 @@ static void draw_rectangle(xcb_window_t win,
 }
 
 static void add_item(const char *item,
-                     size_t sz,
                      int pos,
                      int selected,
                      enum alignment alignment,
@@ -134,7 +156,14 @@ static void add_item(const char *item,
   struct xft_font_drw *font;
   uint32_t xoffset;
   
-  txt = xft_text_geom(ctx->font, item, sz);
+  size_t len;
+  char *disp_item;
+  
+  disp_item = strdup(item);
+  replace_tabs(&disp_item);
+  len = strlen(disp_item);
+  
+  txt = xft_text_geom(ctx->font, disp_item, strlen(disp_item));
   wgeom = win_geom(con, ctx->win);
   height = ctx->font->maxheight + (2 * ctx->padding);
   rect_gc = selected ? ctx->sel_rect_gc : ctx->rect_gc;
@@ -148,20 +177,22 @@ static void add_item(const char *item,
                  yoffset,
                  wgeom.width, height, rect_gc);
 
+  /* Leave the original string intact for search purposes. */
   xft_draw_text(font,
                 xoffset,
                 yoffset + ((height - txt.height) / 2),
-                item, sz);
+                disp_item, len);
+  free(disp_item);
 }
 
 static void draw_page(const char **page, size_t sz, int sel,
-                            struct menu_ctx *ctx) {
+                      struct menu_ctx *ctx) {
   int i;
   ctx->page = page;
 
   ctx->sel = sel;
   for (i = 0; i < (int)sz; i++)
-    add_item(page[i], strlen(page[i]), i, (i == sel), LEFT, ctx);
+    add_item(page[i], i, (i == sel), LEFT, ctx);
   
   xcb_flush(con);
   XFlush(dpy);
@@ -174,9 +205,9 @@ static void menu_update(const char **page, size_t sz, uint32_t sel, struct menu_
 
   if(page == ctx->page) {
     if(sel == ctx->sel)
-        return;
-    add_item(page[ctx->sel], strlen(page[ctx->sel]), ctx->sel, 0, LEFT, ctx);
-    add_item(page[sel], strlen(page[sel]), sel, 1, LEFT, ctx);
+      return;
+    add_item(page[ctx->sel], ctx->sel, 0, LEFT, ctx);
+    add_item(page[sel], sel, 1, LEFT, ctx);
     ctx->sel = sel;
   } else {
     /* If the page has changed redraw everything. */
@@ -218,9 +249,9 @@ static xcb_window_t create_win(int x, int y, int width, int height, uint32_t col
 }
 
 static void show_item(struct menu_ctx *ctx,
-                    const char ***opage,
-                    int *osel,
-                    int target) {
+                      const char ***opage,
+                      int *osel,
+                      int target) {
   const char **page = (const char **) *opage;
   int sel = *osel;
   
@@ -299,7 +330,7 @@ static void search_forward(struct menu_ctx *ctx,
 }
 
 static void isearch(struct menu_ctx *ctx,
-                   const char ***opage,
+                    const char ***opage,
                     int *osel,
                     int forward) {
   
@@ -311,11 +342,11 @@ static void isearch(struct menu_ctx *ctx,
   int height = textbox_height(dpy, ctx->fontname);
   struct geom root = win_geom(con, screen->root);
   char *query = textbox(dpy,
-                         0,
-                         root.height - height,
-                         ctx->fgcol,
-                         ctx->bgcol,
-                         ctx->fontname);
+                        0,
+                        root.height - height,
+                        ctx->fgcol,
+                        ctx->bgcol,
+                        ctx->fontname);
   
   xcb_set_input_focus(con, XCB_INPUT_FOCUS_PARENT, ctx->win, XCB_CURRENT_TIME);
   if(!query) return;
@@ -609,7 +640,6 @@ void print_cfg(struct cfg *c) {
   printf("key_sel: %s\n", c->key_sel);
   exit(1);
 } 
-
 
 char **read_items(size_t *sz, FILE *fp) {
   int c = 1;
