@@ -3,6 +3,10 @@
 A small X11 program which produces a menu based on line separated
 records and prints the selected option to STDOUT.
 
+Demo:
+
+![Demo](demo.gif "Demo")
+
 # Installation
 
 ```
@@ -24,8 +28,6 @@ ps aux|grep urxvt|xmenu|awk '{ print $2 }'|xargs kill
 
 might be bound to a button which allows the user to selectively
 kill a terminal instance.
-
-![Demo](demo.gif "Demo")
 
 # Customization
 
