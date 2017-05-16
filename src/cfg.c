@@ -6,11 +6,11 @@
 #include "cfg.h"
 #include "key.h"
 #include "color.h"
-  
-#define DEFAULT_FG_COL "#002b36"
-#define DEFAULT_BG_COL "#ffffff"
-#define DEFAULT_SEL_FG_COL "#ffffff"
-#define DEFAULT_SEL_BG_COL "#000000"
+
+#define DEFAULT_FG_COL "#FFFFFF"
+#define DEFAULT_BG_COL "#002B36"
+#define DEFAULT_SEL_FG_COL "#002B36"
+#define DEFAULT_SEL_BG_COL "#FFFFFF"
 #define DEFAULT_FONT "Monospace:pixelsize=20"
 #define DEFAULT_PADDING 0
 #define DEFAULT_SPACING 0

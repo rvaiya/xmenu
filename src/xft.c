@@ -94,7 +94,7 @@ struct geom xft_text_geom(struct xft_font_drw *font, const char *str, size_t len
   
   XftTextExtentsUtf8(font->dpy, font->font, (FcChar8 *)str, len, &e);
   g.yOffset = e.y;
-  g.height = e.height;
+  g.height = font->font->ascent + font->font->descent - 1;
   g.width = e.width;
   return g;
 }
@@ -106,7 +106,7 @@ void xft_draw_text(struct xft_font_drw *font,
   XGlyphInfo e;
   
   XftTextExtentsUtf8(font->dpy, font->font, (FcChar8 *)str, len, &e);
-  XftDrawStringUtf8(font->drw, font->col, font->font, x, y + e.y, (FcChar8 *)str, len);
+  XftDrawStringUtf8(font->drw, font->col, font->font, x, y + font->font->ascent, (FcChar8 *)str, len);
 }
 
 void xft_free(struct xft_font_drw *font) {

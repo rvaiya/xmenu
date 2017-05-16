@@ -2206,7 +2206,7 @@ int validate_key_name(const char *name) {
 /* Caller is expected to free the result. Quite expensive, but good enough for use in the
    main event loop. */
 
-const char *key_name(struct keymap *keymap, xcb_keycode_t keycode, uint16_t mode_mask) {
+char *key_name(struct keymap *keymap, xcb_keycode_t keycode, uint16_t mode_mask) {
   xcb_keysym_t sym = lookup_keycode(keymap, keycode, mode_mask);
   const char *kname = _key_name(sym);
   char *result;

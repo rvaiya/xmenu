@@ -13,7 +13,7 @@ xcb_keysym_t lookup_keycode(struct keymap *keymap,
 struct keymap *get_keymap(xcb_connection_t *con);
 int lookup_key(const char *name, xcb_keysym_t *keysym);
 void key_names(char ***lst, size_t *sz);
-const char *key_name(struct keymap *keymap, xcb_keycode_t keycode, uint16_t mode_mask);
+char *key_name(struct keymap *keymap, xcb_keycode_t keycode, uint16_t mode_mask);
 /* Returns 0 if the provided string corresponds to a valid keyname. */
 int validate_key_name(const char *name); 
 #endif

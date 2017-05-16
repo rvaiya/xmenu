@@ -1,3 +1,5 @@
+#include <sys/types.h>
+#include <regex.h>
 #include <X11/Xlib-xcb.h>
 #include <unistd.h>
 #include <stdarg.h>
@@ -10,6 +12,7 @@
 #include "font.h"
 #include "cfg.h"
 #include "xft.h"
+#include "textbox.h"
 
 #define die(fmt, ...) _die(__func__, __LINE__, fmt, ##__VA_ARGS__)
 
@@ -23,10 +26,18 @@ struct menu_ctx {
   struct xft_font_drw *font;
   struct xft_font_drw *sel_font;
   xcb_window_t win;
+  const char *fgcol;
+  const char *bgcol;
+  const char *fontname;
   uint32_t padding;
   uint32_t spacing;
   uint32_t sel;
+  uint32_t page_sz;
+  uint32_t winh;
   const char **page;
+  const char **items;
+  char *last_search;
+  size_t items_sz;
 };
 
 enum alignment {
@@ -67,18 +78,38 @@ static struct menu_ctx *menu_ctx(xcb_window_t win,
                                  char *sel_bgcol,
                                  char *font,
                                  int padding,
-                                 int spacing) {
+                                 int spacing,
+                                 const char **items,
+                                 size_t items_sz) {
+  size_t height;
   struct menu_ctx *ctx = malloc(sizeof(struct menu_ctx));
+  
+  struct geom root = win_geom(con, screen->root);
+  
   ctx->rect_gc = rectgc(bgcol);
   ctx->font = xft_get_font_drw(dpy, win, font, fgcol);
   
   ctx->sel_rect_gc = rectgc(sel_bgcol);
   ctx->sel_font = xft_get_font_drw(dpy, win, font, sel_fgcol);
   
+  ctx->bgcol = bgcol;
+  ctx->fgcol = fgcol;
+  ctx->fontname = font;
+  
   ctx->win = win;
   ctx->padding = padding;
   ctx->spacing = spacing;
   ctx->page = NULL;
+  
+  ctx->items = items;
+  ctx->items_sz = items_sz;
+  
+  height = ctx->font->maxheight + (2 * ctx->padding) + ctx->spacing;
+  
+  ctx->last_search = NULL;
+  ctx->page_sz = height * items_sz > root.height ? root.height / height : items_sz;
+  ctx->winh = ctx->page_sz * height;
+  
   return ctx;
 }
 
@@ -123,13 +154,13 @@ static void add_item(const char *item,
                 item, sz);
 }
 
-static void draw_page(const char **page, size_t sz, size_t sel,
+static void draw_page(const char **page, size_t sz, int sel,
                             struct menu_ctx *ctx) {
-  size_t i;
+  int i;
   ctx->page = page;
 
   ctx->sel = sel;
-  for (i = 0; i < sz; i++)
+  for (i = 0; i < (int)sz; i++)
     add_item(page[i], strlen(page[i]), i, (i == sel), LEFT, ctx);
   
   xcb_flush(con);
@@ -186,11 +217,115 @@ static xcb_window_t create_win(int x, int y, int width, int height, uint32_t col
   return id;
 }
 
-/* Obtain the dimensions of a menu item that would be produced by the provided context. */
-static int menu_entry_height(struct menu_ctx *ctx) {
-  return ctx->font->maxheight + (2 * ctx->padding) + ctx->spacing;
+static void show_item(struct menu_ctx *ctx,
+                    const char ***opage,
+                    int *osel,
+                    int target) {
+  const char **page = (const char **) *opage;
+  int sel = *osel;
+  
+  int start = page - ctx->items;
+  int end = start + ctx->page_sz - 1;
+  
+  if(target < 0 || target >= (int)ctx->items_sz)
+    return;
+  
+  if(target >= start && target <= end)
+    sel = target - start;
+  else if((ctx->items_sz - (target - ((int)ctx->page_sz / 2))) < ctx->page_sz) {
+    page = ctx->items + ctx->items_sz - ctx->page_sz;
+    sel = target - (ctx->items_sz - ctx->page_sz);
+  } 
+  else if((target - ((int)ctx->page_sz / 2)) < 0) {
+    page = ctx->items;
+    sel = target;
+  }
+  else {
+    sel = (ctx->page_sz / 2);
+    page = ctx->items + target - (ctx->page_sz / 2);
+  }
+  
+  *opage = page;
+  *osel = sel;
 }
 
+static void search_reverse(struct menu_ctx *ctx,
+                           const char *pattern,
+                           const char ***opage,
+                           int *osel) {
+  
+  if(!pattern) return;
+  
+  const char **page = (const char **) *opage;
+  int sel = *osel;
+  int i;
+  
+  regex_t pat;
+  
+  regcomp(&pat, pattern, REG_NOSUB);
+  
+  for (i = sel + (page - ctx->items) - 1; i >= 0; i--) {
+    if(!regexec(&pat, ctx->items[i], 0, NULL, 0)) {
+      show_item(ctx, opage, osel, i);
+      break;
+    }
+  }
+  
+  regfree(&pat);
+}
+static void search_forward(struct menu_ctx *ctx,
+                           const char *pattern,
+                           const char ***opage,
+                           int *osel) {
+  
+  if(!pattern) return;
+  
+  const char **page = (const char **) *opage;
+  int sel = *osel;
+  int i;
+  
+  regex_t pat;
+  
+  regcomp(&pat, pattern, REG_NOSUB);
+  
+  for (i = sel + (page - ctx->items) + 1; i < (int)ctx->items_sz; i++) {
+    if(!regexec(&pat, ctx->items[i], 0, NULL, 0)) {
+      show_item(ctx, opage, osel, i);
+      break;
+    }
+  }
+  
+  regfree(&pat);
+}
+
+static void isearch(struct menu_ctx *ctx,
+                   const char ***opage,
+                    int *osel,
+                    int forward) {
+  
+  if(ctx->last_search) {
+    free(ctx->last_search);
+    ctx->last_search = NULL;
+  }
+  
+  int height = textbox_height(dpy, ctx->fontname);
+  struct geom root = win_geom(con, screen->root);
+  char *query = textbox(dpy,
+                         0,
+                         root.height - height,
+                         ctx->fgcol,
+                         ctx->bgcol,
+                         ctx->fontname);
+  
+  xcb_set_input_focus(con, XCB_INPUT_FOCUS_PARENT, ctx->win, XCB_CURRENT_TIME);
+  if(!query) return;
+
+  ctx->last_search = query;
+  if(forward)
+    search_forward(ctx, query, opage, osel);
+  else
+    search_reverse(ctx, query, opage, osel);
+}
 
 int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
   struct geom root;
@@ -198,13 +333,10 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
   struct menu_ctx *ctx;
   struct keymap *keymap;
   xcb_generic_event_t *ev;
-  uint32_t bgcol, winh;
+  uint32_t bgcol;
   int sel;
-  /* The height occupied by a menu item. */
-  int entry_height;
   /* The maximum number of elements that will fit in the window. 
      (Bottleneck is the screen size). */
-  int page_sz;
   int opnum = 0;
   const char **page = items;
     
@@ -221,25 +353,31 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
                  cfg->sel_bgcol,
                  cfg->font,
                  cfg->padding,
-                 cfg->spacing);
+                 cfg->spacing,
+                 items,
+                 items_sz);
  
-  entry_height = menu_entry_height(ctx);
-  page_sz = entry_height * items_sz > root.height ? root.height / entry_height : items_sz;
-  winh = page_sz * entry_height;
 
-  xcb_configure_window(con, win, XCB_CONFIG_WINDOW_HEIGHT, (uint32_t[]){winh});
+  xcb_configure_window(con, win, XCB_CONFIG_WINDOW_HEIGHT, (uint32_t[]){ctx->winh});
 
   xcb_map_window(con, win);
   xcb_set_input_focus(con, XCB_INPUT_FOCUS_PARENT, win, XCB_CURRENT_TIME);
   xcb_flush(con);
   
   sel = 0;
+  
+  char *last_keyname = NULL;
   while((ev = xcb_wait_for_event(con))) {
-    const char *keyname;
+    char *keyname;
+    
+    enum {
+      FORWARD,
+      REVERSE
+    } search_direction;
     
     switch(ev->response_type) {
       case XCB_EXPOSE:
-        draw_page(page, page_sz, sel, ctx);
+        draw_page(page, ctx->page_sz, sel, ctx);
         xcb_flush(con);
         break;
       case XCB_KEY_PRESS:
@@ -251,23 +389,28 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
         if(!strcmp(cfg->key_home, keyname)) {
           opnum = opnum ? opnum : 1;
           sel = opnum - 1;
-          if(sel >= page_sz)
-            sel = page_sz - 1;
+          if((uint32_t)sel >= ctx->page_sz)
+            sel = ctx->page_sz - 1;
           opnum = 0;
-        } else if(!strcmp(cfg->key_middle, keyname)) {
+        }
+        else if(!strcmp(cfg->key_middle, keyname)) {
           opnum = opnum ? opnum : 1;
-          sel = (page_sz - 1) / 2;
+          sel = (ctx->page_sz - 1) / 2;
           opnum = 0;
         }
         else if(!strcmp(cfg->key_last, keyname)) {
           opnum = opnum ? opnum : 1;
-          sel = page_sz - opnum;
-          if(sel < 0)
+          
+          if(((int)ctx->page_sz - opnum) < 0)
             sel = 0;
+          else
+            sel = ctx->page_sz - opnum;
+          
           opnum = 0;
         }
         else if(!strcmp(cfg->key_up, keyname)) {
           opnum = opnum ? opnum : 1;
+          
           sel -= opnum;
           if(sel < 0) {
             page -= sel * -1;
@@ -281,11 +424,11 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
         else if(!strcmp(cfg->key_down, keyname)) {
           opnum = opnum ? opnum : 1;
           sel += opnum;
-          if(sel >= page_sz) {
-            page += sel - page_sz + 1;
-            if(page >= items + items_sz - page_sz)
-              page = items + items_sz - page_sz;
-            sel = page_sz - 1;
+          if((uint32_t)sel >= ctx->page_sz) {
+            page += sel - ctx->page_sz + 1;
+            if(page >= items + items_sz - ctx->page_sz)
+              page = items + items_sz - ctx->page_sz;
+            sel = ctx->page_sz - 1;
           }
           opnum = 0;
         }
@@ -294,16 +437,74 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
           return 0;
         }
         else if(!strcmp(cfg->key_page_down, keyname)) {
-          page += page_sz;
-          if(page > items + items_sz - page_sz)
-            page = items + items_sz - page_sz;
+          opnum = opnum ? opnum : 1;
+          page += ctx->page_sz * opnum;
+          if(page > items + items_sz - ctx->page_sz)
+            page = items + items_sz - ctx->page_sz;
           sel = 0;
+          opnum = 0;
         }
         else if(!strcmp(cfg->key_page_up, keyname)) {
-          page -= page_sz;
+          opnum = opnum ? opnum : 1;
+          page -= ctx->page_sz * opnum;
           if(page < items)
             page = items;
-          sel = page_sz - 1;
+          sel = ctx->page_sz - 1;
+          opnum = 0;
+        }
+        else if(!strcmp("slash", keyname)) {
+          opnum = opnum > 0 ? opnum - 1 : opnum;
+          search_direction = FORWARD;
+          isearch(ctx, &page, &sel, 1); 
+          while(opnum--)
+            search_forward(ctx, ctx->last_search, &page, &sel);
+          opnum = 0;
+        }
+        else if(!strcmp("question", keyname)) {
+          opnum = opnum > 0 ? opnum - 1 : opnum;
+          search_direction = REVERSE;
+          isearch(ctx, &page, &sel, 0); 
+          while(opnum--)
+            search_reverse(ctx, ctx->last_search, &page, &sel);
+          opnum = 0;
+        }
+        else if(!strcmp("n", keyname)) {
+          int i;
+          opnum = opnum ? opnum : 1;
+          
+          if(search_direction == FORWARD)
+            for (i = 0; i < opnum; i++)
+              search_forward(ctx, ctx->last_search, &page, &sel);
+          else
+            for (i = 0; i < opnum; i++)
+              search_reverse(ctx, ctx->last_search, &page, &sel);
+          
+          opnum = 0;
+        }
+        else if(!strcmp("N", keyname)) {
+          int i;
+          opnum = opnum ? opnum : 1;
+          
+          if(search_direction == FORWARD)
+            for (i = 0; i < opnum; i++)
+              search_reverse(ctx, ctx->last_search, &page, &sel);
+          else
+            for (i = 0; i < opnum; i++)
+              search_forward(ctx, ctx->last_search, &page, &sel);
+          
+          opnum = 0;
+        }
+        else if(!strcmp("G", keyname)) {
+          if(opnum)
+            show_item(ctx, &page, &sel, opnum - 1);
+          else
+            show_item(ctx, &page, &sel, ctx->items_sz - 1);
+          
+          opnum = 0;
+        }
+        else if(!strcmp("g", keyname)) {
+          if(last_keyname && last_keyname[0] == 'g')
+            show_item(ctx, &page, &sel, 0);
         }
         else if(!strcmp(cfg->key_quit, keyname))
           exit(-1);
@@ -319,8 +520,9 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
                 !strcmp("9", keyname))
           opnum = (opnum * 10) + (keyname[0] & 0xf);
         
-        menu_update(page, page_sz, (uint32_t)sel, ctx);
+        menu_update(page, ctx->page_sz, (uint32_t)sel, ctx);
         xcb_flush(con);
+        last_keyname = keyname;
         break;
       case XCB_FOCUS_OUT:
         xcb_set_input_focus(con, XCB_INPUT_FOCUS_PARENT, win, XCB_CURRENT_TIME);
@@ -349,7 +551,7 @@ void print_keynames() {
 }
 
 void print_help() {
-printf("\
+  printf("\
 A tiny X11 program which displays a menu of items corresponding to \n\
 input lines and prints the selected one to STDOUT. Items are drawn \n\
 from the provided file or STDIN if no arguments are provided.  Item \n\
@@ -359,31 +561,31 @@ be placed in ~/.xmenurc \n\n\
 \
 Optional configuration parameters: \n\n\
 \
-	fgcol: The foreground color. (of the form #xxxxxx) \n\
-	bgcol: The background color. (of the form #xxxxxx) \n\
-	sel_fgcol: The foreground color of the selected element. (of the form #xxxxxx) \n\
-	sel_bgcol: The background color of the selected element. (of the form #xxxxxx) \n\
-	font: The xft font pattern to be used. \n\
-	padding: The amount of padding \n\
-	spacing: The amount of space between elements. \n\
-	width: The total width of the selection window. \n\
-	key_last: A key which selects the last visible element. \n\
-	key_middle: A key which selects the middle element. \n\
-	key_home: A key which selects the first element. \n\
-	key_down: A key which selects the next element. \n\
-	key_page_down: A key which scrolls down one page. \n\
-	key_page_up: A key which scrolls up one page. \n\
-	key_up: A key which selects the previous element. \n\
-	key_quit: A key which exists the dialogue without printing any items. \n\
-	key_sel: A key which closes the menu and prints the selected item to STDOUT. \n\n\
+  fgcol: The foreground color. (of the form #xxxxxx) \n\
+  bgcol: The background color. (of the form #xxxxxx) \n\
+  sel_fgcol: The foreground color of the selected element. (of the form #xxxxxx) \n\
+  sel_bgcol: The background color of the selected element. (of the form #xxxxxx) \n\
+  font: The xft font pattern to be used. \n\
+  padding: The amount of padding \n\
+  spacing: The amount of space between elements. \n\
+  width: The total width of the selection window. \n\
+  key_last: A key which selects the last visible element. \n\
+  key_middle: A key which selects the middle element. \n\
+  key_home: A key which selects the first element. \n\
+  key_down: A key which selects the next element. \n\
+  key_page_down: A key which scrolls down one page. \n\
+  key_page_up: A key which scrolls up one page. \n\
+  key_up: A key which selects the previous element. \n\
+  key_quit: A key which exists the dialogue without printing any items. \n\
+  key_sel: A key which closes the menu and prints the selected item to STDOUT. \n\n\
 \
 Arguments: \n\n\
 \
-	-h: Prints this help message. \n\
-	-c: Prints the merged configuration parameters. \n\
-	-k: Prints a list of valid key names that can be used in the config file. \n\n\
+  -h: Prints this help message. \n\
+  -c: Prints the merged configuration parameters. \n\
+  -k: Prints a list of valid key names that can be used in the config file. \n\n\
 ");
- exit(-1);
+  exit(-1);
 }
 
 void print_cfg(struct cfg *c) {
@@ -410,20 +612,23 @@ void print_cfg(struct cfg *c) {
 
 
 char **read_items(size_t *sz, FILE *fp) {
-  size_t len;
-  size_t c = 1;
-  size_t n = 0;
-  char *line;
+  int c = 1;
+  int n = 0;
   char **lines = malloc(c * sizeof(char*));
   
+  char *line;
+  size_t len;
   line = NULL;len = 0;
   while(getline(&line, &len, fp) > -1) {
-    if(++n > c)
-      lines = realloc(lines, sizeof(char*) * (c *= 2));
+    n++;
+    if(n > c) {
+      c = n * 2;
+      lines = realloc(lines, sizeof(char*) * c);
+    }
     
     len = strlen(line);
     if(len)
-        line[len - 1] = '\0';
+      line[len - 1] = '\0';
     lines[n - 1] = line;
     line = NULL;len = 0;
   }
@@ -446,30 +651,30 @@ int main(int argc, char **argv) {
   strcpy(cfg_file + strlen(cfg_file), "/.xmenurc");
   cfg = get_cfg(cfg_file, argv[0]);
   
-   if(argc == 2 && !strcmp(argv[1], "-h"))
-     print_help();
-   else if(argc == 2 && !strcmp(argv[1], "-c"))
-     print_cfg(cfg);
-   else if(argc == 2 && !strcmp(argv[1], "-k"))
-     print_keynames();
-   else if(argc == 2) {
-     file = fopen(argv[1], "r");
-     if(!file) {
-       fprintf(stderr, "ERROR: %s is not a valid input file.\n", argv[1]);
-       print_help();
-     }
-   }
-   else if(argc == 1)
-     file = stdin;
-   else {
-     fprintf(stderr, "%s [ -h | -c | -k | <file>]", argv[0]);
-     exit(-1);
-   }
+  if(argc == 2 && !strcmp(argv[1], "-h"))
+    print_help();
+  else if(argc == 2 && !strcmp(argv[1], "-c"))
+    print_cfg(cfg);
+  else if(argc == 2 && !strcmp(argv[1], "-k"))
+    print_keynames();
+  else if(argc == 2) {
+    file = fopen(argv[1], "r");
+    if(!file) {
+      fprintf(stderr, "ERROR: %s is not a valid input file.\n", argv[1]);
+      print_help();
+    }
+  }
+  else if(argc == 1)
+    file = stdin;
+  else {
+    fprintf(stderr, "%s [ -h | -c | -k | <file>]", argv[0]);
+    exit(-1);
+  }
  
-   items = (const char**)read_items(&nitems, file);
-   menu(cfg,
-        items,
-        nitems);
+  items = (const char**)read_items(&nitems, file);
+  menu(cfg,
+       items,
+       nitems);
    
   return 0;
 }

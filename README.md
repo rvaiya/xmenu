@@ -25,6 +25,8 @@ ps aux|grep urxvt|xmenu|awk '{ print $2 }'|xargs kill
 might be bound to a button which allows the user to selectively
 kill a terminal instance.
 
+![Demo](demo.gif "Demo")
+
 # Customization
 
 The appearance of the menu can be configured in ~/.xmenurc.  xmenu -h
@@ -41,13 +43,13 @@ tweaked in accordance with the user's preference.
 ## Keybindings
 
  Keybindings can be customized in ~/.xmenurc. The stock keybindings
- are vi-like (hjkl H, L) and support count operands (e.g '4H' places
- the cursor on the fourth item).
+ are vi-like (hjkl, H, L, C-f, /, etc) and support count operands ('4H'
+ places the cursor on the fourth visible item).
  
 # Dependencies
 
 - libxcb
-- libXft
+- Xft
 - Xlib-xcb
 - Xlib
 
