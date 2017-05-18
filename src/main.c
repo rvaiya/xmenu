@@ -38,6 +38,7 @@ struct menu_ctx {
   const char **items;
   char *last_search;
   size_t items_sz;
+  struct textbox *qbox;
 };
 
 enum alignment {
@@ -102,9 +103,11 @@ static struct menu_ctx *menu_ctx(xcb_window_t win,
                                  char *font,
                                  int padding,
                                  int spacing,
+                                 int width,
                                  const char **items,
                                  size_t items_sz) {
-  size_t height;
+  size_t el_height, maxwinh;
+  size_t tboxh = textbox_height(dpy, font);
   struct menu_ctx *ctx = malloc(sizeof(struct menu_ctx));
   
   struct geom root = win_geom(con, screen->root);
@@ -127,11 +130,20 @@ static struct menu_ctx *menu_ctx(xcb_window_t win,
   ctx->items = items;
   ctx->items_sz = items_sz;
   
-  height = ctx->font->maxheight + (2 * ctx->padding) + ctx->spacing;
+  el_height = ctx->font->maxheight + (2 * ctx->padding) + ctx->spacing;
+  maxwinh = root.height - tboxh;
   
   ctx->last_search = NULL;
-  ctx->page_sz = height * items_sz > root.height ? root.height / height : items_sz;
-  ctx->winh = ctx->page_sz * height;
+  ctx->page_sz = el_height * items_sz > maxwinh ? maxwinh / el_height : items_sz;
+  ctx->winh = ctx->page_sz * el_height;
+  
+  ctx->qbox= textbox_init(dpy,
+                          root.width - width, ctx->winh,
+                          ctx->fgcol,
+                          ctx->bgcol,
+                          ctx->fontname,
+                          width,
+                          1);
   
   return ctx;
 }
@@ -339,16 +351,8 @@ static void isearch(struct menu_ctx *ctx,
     ctx->last_search = NULL;
   }
   
-  int height = textbox_height(dpy, ctx->fontname);
-  struct geom root = win_geom(con, screen->root);
-  char *query = textbox(dpy,
-                        0,
-                        root.height - height,
-                        ctx->fgcol,
-                        ctx->bgcol,
-                        ctx->fontname);
+  char *query = textbox_query(ctx->qbox);
   
-  xcb_set_input_focus(con, XCB_INPUT_FOCUS_PARENT, ctx->win, XCB_CURRENT_TIME);
   if(!query) return;
 
   ctx->last_search = query;
@@ -385,6 +389,7 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
                  cfg->font,
                  cfg->padding,
                  cfg->spacing,
+                 cfg->width,
                  items,
                  items_sz);
  

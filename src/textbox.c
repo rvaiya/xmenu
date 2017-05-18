@@ -2,43 +2,55 @@
 #include "color.h"
 #include "xft.h"
 #include "key.h"
+#include "textbox.h"
 
-struct ctx {
-  Display *dpy;
-  xcb_connection_t *con;
-  xcb_window_t win;
-  xcb_gcontext_t curgc;
-  uint32_t x,y, maxw;
-  struct xft_font_drw *drw;
-};
-
-static void update_text(struct ctx *ctx, const char *str) {
-  const size_t curw = ctx->drw->font->max_advance_width;
+static void update_text(struct textbox *ctx, const char *str) {
+  const size_t curw = ctx->fdrw->font->max_advance_width;
   const size_t padding = curw / 2;
-  struct geom g = xft_text_geom(ctx->drw, str, strlen(str));
-  xcb_configure_window(ctx->con, ctx->win, XCB_CONFIG_WINDOW_WIDTH, (uint32_t[]){g.width + curw + padding});
+  struct geom g = xft_text_geom(ctx->fdrw, str, strlen(str));
+  
+  if(!ctx->fill) {
+    xcb_configure_window(ctx->con,
+                         ctx->win,
+                         XCB_CONFIG_WINDOW_WIDTH,
+                         (uint32_t[]){g.width ? g.width + curw + padding : curw});
+  } else {
+    xcb_clear_area(ctx->con, 1, ctx->pm, 0, 0, ctx->width, ctx->height);
+  }
+  
+  xcb_copy_area(ctx->con, ctx->opm, ctx->pm, ctx->gc, 0, 0, 0, 0, ctx->width, ctx->height);  
+  
+    xcb_poly_fill_rectangle(ctx->con,
+                            ctx->pm,
+                            ctx->gc,
+                            1,
+                            (xcb_rectangle_t[]) {{ 0, 0, ctx->width, ctx->height }});
+  
   xcb_poly_fill_rectangle(ctx->con,
-                          ctx->win,
+                          ctx->pm,
                           ctx->curgc,
                           1,
-                          (xcb_rectangle_t[]) {{ g.width + padding, 0, curw, ctx->drw->maxheight }});
-  
-  xft_draw_text(ctx->drw, 0, (ctx->drw->maxheight - g.height) / 2, str, strlen(str));
+                          (xcb_rectangle_t[]) {{ g.width ? g.width + padding : 0, 0, curw, ctx->fdrw->maxheight }});
+ 
+  xft_draw_text(ctx->fdrw, 0, 0, str, strlen(str));
   
   xcb_flush(ctx->con);
-  XFlush(ctx->dpy); 
+  XFlush(ctx->dpy);
+  
+  xcb_copy_area(ctx->con, ctx->pm, ctx->win, ctx->gc, 0, 0, 0, 0, ctx->width, ctx->height);
+  xcb_flush(ctx->con);
 }
   
-struct ctx *init(Display *dpy,
-                 const char *fgcol,
-                 const char *bgcol,
-                 const char *curcol,
-                 const char *font,
-                 int x,
-                 int y,
-                 int max_width) {
+struct textbox *textbox_init(Display *dpy,
+                             int x, int y,
+                             const char *fgcol,
+                             const char *bgcol,
+                             const char *font,
+                             int width,
+                             int fill) {
   
-  struct ctx *ctx = malloc(sizeof(struct ctx));
+  const char *curcol = fgcol;
+  struct textbox *ctx = malloc(sizeof(struct textbox));
   uint32_t pixel;
   xcb_screen_t *screen;
   int err;
@@ -47,67 +59,98 @@ struct ctx *init(Display *dpy,
   ctx->con = XGetXCBConnection(dpy);
   ctx->x = x;
   ctx->y = y;
-  ctx->maxw = max_width;
+  ctx->fill = fill;
   XSetEventQueueOwner(dpy, XCBOwnsEventQueue);
+  
+  ctx->pm = xcb_generate_id(ctx->con);
+  ctx->opm = xcb_generate_id(ctx->con);
+  ctx->curgc = xcb_generate_id(ctx->con);
+  ctx->gc = xcb_generate_id(ctx->con);
+  ctx->win = xcb_generate_id(ctx->con);
 
   screen = xcb_setup_roots_iterator(xcb_get_setup(ctx->con)).data;
-  
-  
-  pixel = hexcol(ctx->con, curcol, &err);
-  if(err)
-    return NULL;
-  ctx->curgc = xcb_generate_id(ctx->con);
-  xcb_create_gc(ctx->con, ctx->curgc, screen->root,
-                XCB_GC_FOREGROUND |
-                XCB_GC_BACKGROUND |
-                XCB_GC_FILL_STYLE,
-                (uint32_t[]){ pixel, pixel, XCB_FILL_STYLE_SOLID });
-  
   
   pixel = hexcol(ctx->con, bgcol, &err);
   if(err)
     return NULL;
-  ctx->win = xcb_generate_id(ctx->con);
+  
   xcb_create_window(ctx->con,
                     XCB_COPY_FROM_PARENT,
                     ctx->win,
                     screen->root,
                     x, y,
-                    1, 1,
+                    width, 1,
                     0,
                     XCB_WINDOW_CLASS_INPUT_OUTPUT,
                     screen->root_visual,
-                    XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK,
-                    (uint32_t[]){pixel, 1,
+                     XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK,
+                    (uint32_t[]){1,
                         XCB_EVENT_MASK_EXPOSURE |
                         XCB_EVENT_MASK_KEY_PRESS |
                         XCB_EVENT_MASK_FOCUS_CHANGE});
-
-  ctx->drw = xft_get_font_drw(dpy, ctx->win, font, fgcol);
   
-  if(!ctx->drw) {
+  xcb_create_gc(ctx->con, ctx->gc, screen->root,
+                XCB_GC_FOREGROUND |
+                XCB_GC_BACKGROUND |
+                XCB_GC_FILL_STYLE,
+                (uint32_t[]){ pixel, pixel, XCB_FILL_STYLE_SOLID });
+
+
+  ctx->fdrw = xft_get_font_drw(dpy, ctx->pm, font, fgcol);
+  if(!ctx->fdrw) {
     free(ctx);
     return NULL;
   }
   
+  ctx->fontname = font;
+  ctx->width = width;
+  ctx->height = ctx->fdrw->maxheight;
+  
+  pixel = hexcol(ctx->con, curcol, &err);
+  if(err) return NULL;
+  
   xcb_configure_window(ctx->con,
                        ctx->win,
                        XCB_CONFIG_WINDOW_HEIGHT,
-                       (uint32_t[]){ctx->drw->maxheight});
-
+                       (uint32_t[]){ctx->height});
   
+ /* The main pixmap upon which everything is drawn. */ 
+  int depth = xcb_get_geometry_reply(ctx->con, xcb_get_geometry(ctx->con, ctx->win), NULL)->depth;
+  
+  xcb_create_pixmap(ctx->con,
+                    depth,
+                    ctx->pm,
+                    ctx->win,
+                    ctx->width, ctx->height);
+  
+  xcb_create_pixmap(ctx->con,
+                    depth,
+                    ctx->opm,
+                    ctx->win,
+                    ctx->width, ctx->height);
+
   xcb_map_window(ctx->con, ctx->win);
+  xcb_copy_area(ctx->con, ctx->win, ctx->opm, ctx->gc, 0, 0, 0, 0, ctx->width, ctx->height);  
+  xcb_unmap_window(ctx->con, ctx->win);
+  
+  xcb_create_gc(ctx->con, ctx->curgc, ctx->pm,
+                XCB_GC_FOREGROUND |
+                XCB_GC_BACKGROUND |
+                XCB_GC_FILL_STYLE,
+                (uint32_t[]){ pixel, pixel, XCB_FILL_STYLE_SOLID });
   
   xcb_flush(ctx->con);
-  XFlush(dpy); 
-  
   update_text(ctx, "");
   return ctx;
 }
 
-static int evloop(struct ctx *ctx, char *buf) {
+static int evloop(struct textbox *ctx, char *buf) {
   struct keymap *keymap;
   xcb_generic_event_t *ev;
+  
+  xcb_map_window(ctx->con, ctx->win);
+  xcb_flush(ctx->con);
+  update_text(ctx, "");
   
   xcb_set_input_focus(ctx->con, XCB_INPUT_FOCUS_PARENT, ctx->win, XCB_CURRENT_TIME);
   keymap = get_keymap(ctx->con);
@@ -132,12 +175,12 @@ static int evloop(struct ctx *ctx, char *buf) {
         } else if(!strcmp(keyname, "space")) {
           strcat(buf, " ");
         } else if(!strcmp(keyname, "Return")) {
-          xcb_destroy_window(ctx->con, ctx->win);
+          xcb_unmap_window(ctx->con, ctx->win);
           return 0;
         } else if(!strcmp(keyname, "C-u")) {
           *buf = '\0';
         } else if(!strcmp(keyname, "Escape")) {
-          xcb_destroy_window(ctx->con, ctx->win);
+          xcb_unmap_window(ctx->con, ctx->win);
           return -1;
         } else if(strlen(keyname) == 1) {
           c = key_name(keymap,
@@ -164,14 +207,8 @@ static int evloop(struct ctx *ctx, char *buf) {
   return -1;
 } 
 
-char *textbox(Display *dpy,
-              int x, int y,
-              const char *fgcol,
-              const char *bgcol,
-              const char *font) { 
-  char *buf = malloc(sizeof(char) * 256);
-  
-  struct ctx *ctx = init(dpy, fgcol, bgcol, fgcol, font, x, y, 300);
+char *textbox_query(struct textbox *ctx) {
+  char *buf = malloc(sizeof(char) * 1024);
   
   if(evloop(ctx, buf)) {
     free(buf);
@@ -180,12 +217,12 @@ char *textbox(Display *dpy,
   
   return buf;
 }
-
+              
 size_t textbox_height(Display *dpy, const char *font) {
   size_t height;
-  struct xft_font_drw *drw = xft_get_font_drw(dpy, DefaultRootWindow(dpy), font, "#000000");
+  struct xft_font_drw *fdrw = xft_get_font_drw(dpy, DefaultRootWindow(dpy), font, "#000000");
   
-  height = drw->maxheight;
-  xft_free(drw);
+  height = fdrw->maxheight;
+  xft_free(fdrw);
   return height;
 }
