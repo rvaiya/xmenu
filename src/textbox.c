@@ -4,10 +4,16 @@
 #include "key.h"
 #include "textbox.h"
 
-static void update_text(struct textbox *ctx, const char *str) {
+/* Returns the number of characters drawn. */
+static int update_text(struct textbox *ctx, const char *str) {
   const size_t curw = ctx->fdrw->font->max_advance_width;
   const size_t padding = curw / 2;
   struct geom g = xft_text_geom(ctx->fdrw, str, strlen(str));
+  
+  int len = strlen(str);
+  int nchars = (ctx->width - curw) / ctx->fdrw->font->max_advance_width;
+  nchars = len < nchars ? len : nchars;
+  int curx = len ? nchars * ctx->fdrw->font->max_advance_width + padding : 0;
   
   if(!ctx->fill) {
     xcb_configure_window(ctx->con,
@@ -30,15 +36,17 @@ static void update_text(struct textbox *ctx, const char *str) {
                           ctx->pm,
                           ctx->curgc,
                           1,
-                          (xcb_rectangle_t[]) {{ g.width ? g.width + padding : 0, 0, curw, ctx->fdrw->maxheight }});
+                          (xcb_rectangle_t[]) {{ curx, 0, curw, ctx->fdrw->maxheight }});
  
-  xft_draw_text(ctx->fdrw, 0, 0, str, strlen(str));
+  xft_draw_text(ctx->fdrw, 0, 0, str, nchars);
   
   xcb_flush(ctx->con);
   XFlush(ctx->dpy);
   
   xcb_copy_area(ctx->con, ctx->pm, ctx->win, ctx->gc, 0, 0, 0, 0, ctx->width, ctx->height);
   xcb_flush(ctx->con);
+  
+  return nchars;
 }
   
 struct textbox *textbox_init(Display *dpy,
@@ -144,6 +152,19 @@ struct textbox *textbox_init(Display *dpy,
   return ctx;
 }
 
+static void hide_window(struct textbox *ctx) {
+  xcb_copy_area(ctx->con,
+                ctx->opm,
+                ctx->win,
+                ctx->gc,
+                0, 0, 0, 0,
+                ctx->width,
+                ctx->height);
+  
+  xcb_unmap_window(ctx->con, ctx->win);
+  xcb_flush(ctx->con);
+}
+
 static int evloop(struct textbox *ctx, char *buf) {
   struct keymap *keymap;
   xcb_generic_event_t *ev;
@@ -175,12 +196,12 @@ static int evloop(struct textbox *ctx, char *buf) {
         } else if(!strcmp(keyname, "space")) {
           strcat(buf, " ");
         } else if(!strcmp(keyname, "Return")) {
-          xcb_unmap_window(ctx->con, ctx->win);
+          hide_window(ctx);
           return 0;
         } else if(!strcmp(keyname, "C-u")) {
           *buf = '\0';
         } else if(!strcmp(keyname, "Escape")) {
-          xcb_unmap_window(ctx->con, ctx->win);
+          hide_window(ctx);
           return -1;
         } else if(strlen(keyname) == 1) {
           c = key_name(keymap,
@@ -201,7 +222,7 @@ static int evloop(struct textbox *ctx, char *buf) {
           }
         }
         
-        update_text(ctx, buf);
+        buf[update_text(ctx, buf)] = '\0';
     }
   }
   return -1;
