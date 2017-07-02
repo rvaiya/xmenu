@@ -1,4 +1,15 @@
+DEPS=freetype2  xcb  x11-xcb xft
+CFLAGS=-g -Wall -Wextra
+
+CFILES:=$(shell find src -type f -name '*.c')
+DEPS:=$(shell pkg-config --libs --cflags $(DEPS))
+$(if $(DEPS),,$(error "pkg-config failed"))
+CFLAGS+=$(DEPS)
+
 all:
-	cd src;gcc -lXft -lX11 -lX11-xcb -I/usr/include/freetype2 -Wall -Wextra -lxcb -g cfg.c xft.c textbox.c font.c key.c util.c color.c main.c -o ../xmenu
+	-mkdir bin 2> /dev/null
+	$(CC) $(CFLAGS) $(CFILES) -o bin/xmenu
 install:
-	install xmenu /usr/bin
+	install bin/xmenu /usr/bin
+clean:
+	-rm -rf bin
