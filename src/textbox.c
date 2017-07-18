@@ -194,7 +194,6 @@ static int evloop(struct textbox *ctx, char *buf) {
   xcb_flush(ctx->con);
   update_text(ctx, "");
   
-  xcb_set_input_focus(ctx->con, XCB_INPUT_FOCUS_PARENT, ctx->win, XCB_CURRENT_TIME);
   keymap = get_keymap(ctx->con);
   *buf = '\0';
   

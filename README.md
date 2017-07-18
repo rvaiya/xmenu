@@ -31,7 +31,7 @@ kill a terminal instance.
 
 # Customization
 
-The appearance of the menu can be configured in ~/.xmenurc.  xmenu -h
+The appearance of the menu can be configured in ~/.xmenurc. xmenu -h
 will produce a description of each option, though most should be
 self explanatory. A good way to start is
 

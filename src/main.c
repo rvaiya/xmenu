@@ -79,6 +79,26 @@ void _die(const char *function, uint32_t line, char *fmt, ...) {
   exit(-1);
 }
 
+void grab_kbd(xcb_connection_t *con, xcb_window_t win) {
+  xcb_grab_keyboard_reply_t *r;
+    
+  r = xcb_grab_keyboard_reply(con, xcb_grab_keyboard(con,
+                                                     0,
+                                                     win,
+                                                     XCB_CURRENT_TIME,
+                                                     XCB_GRAB_MODE_SYNC,
+                                                     XCB_GRAB_MODE_ASYNC), NULL);
+                              
+  while (r->status != XCB_GRAB_STATUS_SUCCESS) {
+    r = xcb_grab_keyboard_reply(con, xcb_grab_keyboard(con,
+                                                       0,
+                                                       win,
+                                                       XCB_CURRENT_TIME,
+                                                       XCB_GRAB_MODE_SYNC,
+                                                       XCB_GRAB_MODE_ASYNC), NULL);
+  }
+}
+
 /* TODO make this UTF8 sensitive. */
 static void replace_tabs(char **oline) {
   char *line;
@@ -416,10 +436,10 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
  
 
   xcb_configure_window(con, win, XCB_CONFIG_WINDOW_HEIGHT, (uint32_t[]){ctx->winh});
-
   xcb_map_window(con, win);
-  xcb_set_input_focus(con, XCB_INPUT_FOCUS_PARENT, win, XCB_CURRENT_TIME);
   xcb_flush(con);
+  
+  grab_kbd(con, win);
   
   sel = 0;
   
@@ -580,10 +600,6 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
         menu_update(page, ctx->page_sz, (uint32_t)sel, ctx);
         xcb_flush(con);
         last_keyname = keyname;
-        break;
-      case XCB_FOCUS_OUT:
-        xcb_set_input_focus(con, XCB_INPUT_FOCUS_PARENT, win, XCB_CURRENT_TIME);
-        xcb_flush(con);
         break;
     }
     free(ev);
