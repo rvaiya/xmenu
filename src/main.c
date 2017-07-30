@@ -35,7 +35,11 @@
 #include "xft.h"
 #include "textbox.h"
 
-#define die(fmt, ...) _die(__func__, __LINE__, fmt, ##__VA_ARGS__)
+#ifdef DEBUG
+#define die(fmt, ...) _die("%s: (line %d): "fmt, __func__, __LINE__,  ##__VA_ARGS__)
+#else
+#define die(fmt, ...) _die(fmt, ##__VA_ARGS__)
+#endif
 
 xcb_screen_t *screen;
 xcb_connection_t *con;
@@ -67,11 +71,10 @@ enum alignment {
   CENTRE,
 };
 
-void _die(const char *function, uint32_t line, char *fmt, ...) {
+void _die(char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   
-  fprintf(stderr, "%s: (line %d): ", function, line);
   vfprintf(stderr, fmt, ap);
   
   xcb_disconnect(con);
@@ -97,6 +100,42 @@ void grab_kbd(xcb_connection_t *con, xcb_window_t win) {
                                                        XCB_GRAB_MODE_SYNC,
                                                        XCB_GRAB_MODE_ASYNC), NULL);
   }
+}
+
+static char *field(const char *str, char delim, int n) {
+  int c = 0;
+  int i = 0;
+  char *result = NULL;
+  
+  for(;*str;str++) {
+    if(c == (n-1)) {
+      if(!result)
+        result = malloc(strlen(str) + 1);
+      if(*str == delim) {
+        result[i] = '\0';
+        return result;
+      }
+      result[i++] = *str;
+    }
+    if(*str == delim) c++;
+  }
+  
+  if(result)
+    result[i] = '\0';
+  return result;
+}
+
+char **field_map(const char **items, size_t items_sz, char delim, int n) {
+  char **result = malloc(sizeof(char*) * items_sz);
+  size_t i;
+  for (i = 0; i < items_sz; i++) {
+    result[i] = field(items[i], delim, n);
+    if(!result[i]) {
+      free(result);
+      return NULL;
+    }
+  }
+  return result;
 }
 
 /* TODO make this UTF8 sensitive. */
@@ -403,7 +442,7 @@ static void isearch(struct menu_ctx *ctx,
     search_reverse(ctx, query, opage, osel);
 }
 
-int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
+int menu(const struct cfg *cfg, const char **menu_items, const char **items, size_t items_sz) {
   struct geom root;
   xcb_window_t win;
   struct menu_ctx *ctx;
@@ -414,7 +453,7 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
   /* The maximum number of elements that will fit in the window. 
      (Bottleneck is the screen size). */
   int opnum = 0;
-  const char **page = items;
+  const char **page = menu_items;
     
   keymap = get_keymap(con);
  
@@ -431,7 +470,7 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
                  cfg->padding,
                  cfg->spacing,
                  cfg->width,
-                 items,
+                 menu_items,
                  items_sz);
  
 
@@ -494,8 +533,8 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
             sel = 0;
           }
 
-          if(page < items)
-            page = items;
+          if(page < menu_items)
+            page = menu_items;
           opnum = 0;
         }
         else if(!strcmp(cfg->key_down, keyname)) {
@@ -503,29 +542,29 @@ int menu(const struct cfg *cfg, const char **items, size_t items_sz) {
           sel += opnum;
           if((uint32_t)sel >= ctx->page_sz) {
             page += sel - ctx->page_sz + 1;
-            if(page >= items + items_sz - ctx->page_sz)
-              page = items + items_sz - ctx->page_sz;
+            if(page >= menu_items + items_sz - ctx->page_sz)
+              page = menu_items + items_sz - ctx->page_sz;
             sel = ctx->page_sz - 1;
           }
           opnum = 0;
         }
         else if(!strcmp(cfg->key_sel, keyname)) {
-          printf("%s\n", page[sel]);
+          printf("%s\n", items[page - menu_items + sel]);
           return 0;
         }
         else if(!strcmp(cfg->key_page_down, keyname)) {
           opnum = opnum ? opnum : 1;
           page += ctx->page_sz * opnum;
-          if(page > items + items_sz - ctx->page_sz)
-            page = items + items_sz - ctx->page_sz;
+          if(page > menu_items + items_sz - ctx->page_sz)
+            page = menu_items + items_sz - ctx->page_sz;
           sel = 0;
           opnum = 0;
         }
         else if(!strcmp(cfg->key_page_up, keyname)) {
           opnum = opnum ? opnum : 1;
           page -= ctx->page_sz * opnum;
-          if(page < items)
-            page = items;
+          if(page < menu_items)
+            page = menu_items;
           sel = ctx->page_sz - 1;
           opnum = 0;
         }
@@ -623,8 +662,8 @@ void print_keynames() {
   exit(1);
 }
 
-void print_help() {
-  printf("\
+#define help_die(fmt, ...) do { \
+  die("\
 A tiny X11 program which displays a menu of items corresponding to \n\
 input lines and prints the selected one to STDOUT. Items are drawn \n\
 from the provided file or STDIN if no arguments are provided.  Item \n\
@@ -655,11 +694,10 @@ Optional configuration parameters: \n\n\
 Arguments: \n\n\
 \
   -h: Prints this help message. \n\
-  -c: Prints the merged configuration parameters. \n\
+  -c: Prints the current configuration parameters. \n\
   -k: Prints a list of valid key names that can be used in the config file. \n\n\
-");
-  exit(-1);
-}
+"fmt, ##__VA_ARGS__);\
+} while(0)
 
 void print_cfg(struct cfg *c) {
   printf("fgcol: %s\n", c->fgcol);
@@ -709,44 +747,97 @@ char **read_items(size_t *sz, FILE *fp) {
   return lines;
 }
 
+struct options {
+  int print_config;
+  int print_help;
+  int print_keys;
+  int start_search;
+
+  char delim;
+  int field;
+  FILE *file;
+};
+
+struct options opt_parse(int *argc, char ***argv) {
+  char c;
+
+  struct options opt = { 0 };
+  while((c = getopt(*argc, *argv, "hsckd:f:")) != -1) {
+    switch(c) {
+      case 'h':
+        opt.print_help++;
+        break;
+      case 's':
+        opt.start_search++;
+        break;
+      case 'c':
+        opt.print_config++;
+        break;
+      case 'k':
+        opt.print_keys++;
+        break;
+      case 'd':
+        opt.delim = *optarg;
+        break;
+      case 'f':
+        opt.field = atoi(optarg);
+        break;
+      case '?':
+        fprintf(stderr, "ERROR: Invalid option %c\n\n", optopt);
+        die("Usage: %s [ -h | -c | -k ] [-s] [<file>]]\n", **argv);
+        break;
+    }
+  }
+
+  *argc -= optind;
+  *argv += optind;
+  
+  if(*argc) {
+    opt.file = fopen(**argv, "r");
+    if(!opt.file)
+      help_die("ERROR: %s is not a valid input file.\n", **argv);
+  } else
+    opt.file = stdin;
+  
+  return opt;
+}
 
 int main(int argc, char **argv) {
-  FILE *file;
   char cfg_file[256];
   struct cfg *cfg;
   size_t nitems;
   const char **items;
-  
-  init_con();
-  
+  const char **menu_items;
+     
   strncpy(cfg_file, getenv("HOME"), 240);
   strcpy(cfg_file + strlen(cfg_file), "/.xmenurc");
   cfg = get_cfg(cfg_file, argv[0]);
-  
-  if(argc == 2 && !strcmp(argv[1], "-h"))
-    print_help();
-  else if(argc == 2 && !strcmp(argv[1], "-c"))
-    print_cfg(cfg);
-  else if(argc == 2 && !strcmp(argv[1], "-k"))
-    print_keynames();
-  else if(argc == 2) {
-    file = fopen(argv[1], "r");
-    if(!file) {
-      fprintf(stderr, "ERROR: %s is not a valid input file.\n", argv[1]);
-      print_help();
-    }
-  }
-  else if(argc == 1)
-    file = stdin;
-  else {
-    fprintf(stderr, "%s [ -h | -c | -k | <file>]", argv[0]);
-    exit(-1);
-  }
+    
+  init_con();
+  struct options opt = opt_parse(&argc, &argv);
+
  
-  items = (const char**)read_items(&nitems, file);
+  if(opt.print_help)
+    help_die();
+  else if(opt.print_config)
+    print_cfg(cfg);
+  else if(opt.print_keys)
+    print_keynames();
+   
+  items = (const char**)read_items(&nitems, opt.file);
+  if(opt.delim && opt.field) {
+    menu_items = field_map(items, nitems, opt.delim, opt.field);
+    if(!menu_items)
+        die("ERROR: Invalid input, all lines must have at least %d fields.\n", opt.field);
+  }
+  else
+    menu_items = items;
+  
+    
   menu(cfg,
+       menu_items,
        items,
        nitems);
-   
+     
   return 0;
 }
