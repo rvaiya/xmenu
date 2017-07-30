@@ -758,6 +758,7 @@ struct options {
   int print_config;
   int print_help;
   int print_keys;
+  int print_version;
   int start_search;
 
   char delim;
@@ -769,8 +770,11 @@ struct options opt_parse(int *argc, char ***argv) {
   char c;
 
   struct options opt = { 0 };
-  while((c = getopt(*argc, *argv, "hsckd:f:")) != -1) {
+  while((c = getopt(*argc, *argv, "vhsckd:f:")) != -1) {
     switch(c) {
+      case 'v':
+        opt.print_version++;
+        break;
       case 'h':
         opt.print_help++;
         break;
@@ -824,7 +828,9 @@ int main(int argc, char **argv) {
   struct options opt = opt_parse(&argc, &argv);
 
  
-  if(opt.print_help)
+  if(opt.print_version)
+    die("Version: "VERSION"\n");
+  else if(opt.print_help)
     help_die();
   else if(opt.print_config)
     print_cfg(cfg);
