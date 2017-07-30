@@ -385,7 +385,8 @@ static void search_reverse(struct menu_ctx *ctx,
   
   regex_t pat;
   
-  regcomp(&pat, pattern, REG_NOSUB | REG_ICASE);
+  if(regcomp(&pat, pattern, REG_NOSUB | REG_ICASE))
+    return;
   
   for (i = sel + (page - ctx->items) - 1; i >= 0; i--) {
     if(!regexec(&pat, ctx->items[i], 0, NULL, 0)) {
@@ -409,7 +410,8 @@ static void search_forward(struct menu_ctx *ctx,
   
   regex_t pat;
   
-  regcomp(&pat, pattern, REG_NOSUB | REG_ICASE);
+  if(regcomp(&pat, pattern, REG_NOSUB | REG_ICASE))
+    return;
   
   for (i = sel + (page - ctx->items) + 1; i < (int)ctx->items_sz; i++) {
     if(!regexec(&pat, ctx->items[i], 0, NULL, 0)) {
