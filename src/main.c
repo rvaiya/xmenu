@@ -22,6 +22,7 @@
 #include <sys/types.h>
 #include <regex.h>
 #include <X11/Xlib-xcb.h>
+#include <xcb/xcb.h>
 #include <unistd.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -40,6 +41,8 @@
 #else
 #define die(fmt, ...) _die(fmt, ##__VA_ARGS__)
 #endif
+
+#define root_win(con) (xcb_setup_roots_iterator(xcb_get_setup(con)).data)
 
 xcb_screen_t *screen;
 xcb_connection_t *con;
@@ -84,13 +87,13 @@ void _die(char *fmt, ...) {
 
 void grab_kbd(xcb_connection_t *con, xcb_window_t win) {
   xcb_grab_keyboard_reply_t *r;
-    
+    xcb_generic_error_t *err = NULL;
   r = xcb_grab_keyboard_reply(con, xcb_grab_keyboard(con,
                                                      0,
                                                      win,
                                                      XCB_CURRENT_TIME,
                                                      XCB_GRAB_MODE_SYNC,
-                                                     XCB_GRAB_MODE_ASYNC), NULL);
+                                                     XCB_GRAB_MODE_ASYNC), &err);
                               
   while (r->status != XCB_GRAB_STATUS_SUCCESS) {
     r = xcb_grab_keyboard_reply(con, xcb_grab_keyboard(con,
@@ -438,7 +441,7 @@ static void isearch(struct menu_ctx *ctx,
     ctx->last_search = NULL;
   }
   
-  char *query = textbox_query(ctx->qbox);
+  char *query = textbox_query(ctx->qbox, 0);
   
   if(!query) return;
 
@@ -760,7 +763,9 @@ struct options {
   int print_keys;
   int print_version;
   int start_search;
+  int prompt_mode;
 
+  char *prompt_str;
   char delim;
   int field;
   FILE *file;
@@ -770,8 +775,12 @@ struct options opt_parse(int *argc, char ***argv) {
   char c;
 
   struct options opt = { 0 };
-  while((c = getopt(*argc, *argv, "vhsckd:f:")) != -1) {
+  while((c = getopt(*argc, *argv, "pvhsckd:f:")) != -1) {
     switch(c) {
+      case 'p': //Prompt mode
+        opt.prompt_mode++;
+        opt.prompt_str = optarg;
+        break;
       case 'v':
         opt.print_version++;
         break;
@@ -803,14 +812,31 @@ struct options opt_parse(int *argc, char ***argv) {
   *argc -= optind;
   *argv += optind;
   
-  if(*argc) {
-    opt.file = fopen(**argv, "r");
-    if(!opt.file)
-      help_die("ERROR: %s is not a valid input file.\n", **argv);
-  } else
-    opt.file = stdin;
-  
+  if(!opt.prompt_mode) {
+    if(*argc) {
+        opt.file = fopen(**argv, "r");
+        if(!opt.file)
+        help_die("ERROR: %s is not a valid input file.\n", **argv);
+    } else
+        opt.file = stdin;
+  }
+
   return opt;
+}
+
+
+void prompt(char *str, struct cfg *cfg) {
+  //TODO add prompt string to textbox.c
+  xcb_screen_t *root = root_win(con);
+  struct textbox* tbox = textbox_init(dpy,
+                                      root->width_in_pixels - cfg->width, 0,
+                                      cfg->fgcol,
+                                      cfg->bgcol,
+                                      cfg->font,
+                                      cfg->width,
+                                      1);
+  char *result = textbox_query(tbox, 1);
+  printf(result);
 }
 
 int main(int argc, char **argv) {
@@ -827,8 +853,11 @@ int main(int argc, char **argv) {
   init_con();
   struct options opt = opt_parse(&argc, &argv);
 
- 
-  if(opt.print_version)
+  if(opt.prompt_mode) {
+    prompt(opt.prompt_str, cfg);
+    return 0;
+  } 
+  else if(opt.print_version)
     die("Version: "VERSION"\n");
   else if(opt.print_help)
     help_die();
@@ -846,7 +875,6 @@ int main(int argc, char **argv) {
   else
     menu_items = items;
   
-    
   menu(cfg,
        menu_items,
        items,

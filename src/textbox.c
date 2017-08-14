@@ -173,6 +173,30 @@ struct textbox *textbox_init(Display *dpy,
   return ctx;
 }
 
+static void grab_kbd(xcb_connection_t *con, xcb_window_t win) {
+  xcb_grab_keyboard_reply_t *r;
+  xcb_generic_error_t *err = NULL;
+  r = xcb_grab_keyboard_reply(con, xcb_grab_keyboard(con,
+                                                     0,
+                                                     win,
+                                                     XCB_CURRENT_TIME,
+                                                     XCB_GRAB_MODE_SYNC,
+                                                     XCB_GRAB_MODE_ASYNC), &err);
+                              
+  while (r->status != XCB_GRAB_STATUS_SUCCESS) {
+    r = xcb_grab_keyboard_reply(con, xcb_grab_keyboard(con,
+                                                       0,
+                                                       win,
+                                                       XCB_CURRENT_TIME,
+                                                       XCB_GRAB_MODE_SYNC,
+                                                       XCB_GRAB_MODE_ASYNC), NULL);
+  }
+}
+
+static void release_kbd(struct textbox *ctx) {
+  xcb_flush(ctx->con);
+}
+
 static void hide_window(struct textbox *ctx) {
   xcb_copy_area(ctx->con,
                 ctx->opm,
@@ -182,16 +206,19 @@ static void hide_window(struct textbox *ctx) {
                 ctx->width,
                 ctx->height);
   
+  release_kbd(ctx);
   xcb_unmap_window(ctx->con, ctx->win);
   xcb_flush(ctx->con);
 }
 
-static int evloop(struct textbox *ctx, char *buf) {
+static int evloop(struct textbox *ctx, char *buf, int grab_keyboard) {
   struct keymap *keymap;
   xcb_generic_event_t *ev;
   
   xcb_map_window(ctx->con, ctx->win);
   xcb_flush(ctx->con);
+  if(grab_keyboard)
+    grab_kbd(ctx->con, ctx->win);
   update_text(ctx, "");
   
   keymap = get_keymap(ctx->con);
@@ -248,10 +275,10 @@ static int evloop(struct textbox *ctx, char *buf) {
   return -1;
 } 
 
-char *textbox_query(struct textbox *ctx) {
+char *textbox_query(struct textbox *ctx, int grab_keyboard) {
   char *buf = malloc(sizeof(char) * 1024);
   
-  if(evloop(ctx, buf)) {
+  if(evloop(ctx, buf, grab_keyboard)) {
     free(buf);
     return NULL;
   }

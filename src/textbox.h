@@ -39,7 +39,7 @@ struct textbox {
   struct xft_font_drw *fdrw;
 };
 
-char *textbox_query(struct textbox *ctx);
+char *textbox_query(struct textbox *ctx, int grab_keyboard);
 size_t textbox_height(Display *dpy, const char *font);
 struct textbox *textbox_init(Display *dpy, int x, int y, const char *fgcol, const char *bgcol,
                              const char *font, int width, int fill);
