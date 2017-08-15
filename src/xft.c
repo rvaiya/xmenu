@@ -124,9 +124,7 @@ void xft_draw_text(struct xft_font_drw *font,
                    int x, int y,
                    const char *str,
                    size_t len) {
-  XGlyphInfo e;
   
-  XftTextExtentsUtf8(font->dpy, font->font, (FcChar8 *)str, len, &e);
   XftDrawStringUtf8(font->drw, font->col, font->font, x, y + font->font->ascent, (FcChar8 *)str, len);
 }
 

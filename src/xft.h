@@ -43,5 +43,8 @@ void xft_draw_text(struct xft_font_drw *font,
                    const char *str,
                    size_t len);
 void xft_free(struct xft_font_drw *font);
-struct xft_font_drw *xft_get_font_drw(Display *dpy, xcb_window_t win, const char *name, const char *color);
+struct xft_font_drw *xft_get_font_drw(Display *dpy,
+                                      xcb_window_t win,
+                                      const char *name,
+                                      const char *color);
 #endif

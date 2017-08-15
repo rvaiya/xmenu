@@ -29,6 +29,7 @@
 static int update_text(struct textbox *ctx, const char *str) {
   const size_t curw = ctx->fdrw->font->max_advance_width;
   const size_t padding = curw / 2;
+  
   struct geom g = xft_text_geom(ctx->fdrw, str, strlen(str));
   
   int len = strlen(str);
@@ -47,11 +48,11 @@ static int update_text(struct textbox *ctx, const char *str) {
   
   xcb_copy_area(ctx->con, ctx->opm, ctx->pm, ctx->gc, 0, 0, 0, 0, ctx->width, ctx->height);  
   
-    xcb_poly_fill_rectangle(ctx->con,
-                            ctx->pm,
-                            ctx->gc,
-                            1,
-                            (xcb_rectangle_t[]) {{ 0, 0, ctx->width, ctx->height }});
+  xcb_poly_fill_rectangle(ctx->con,
+                          ctx->pm,
+                          ctx->gc,
+                          1,
+                          (xcb_rectangle_t[]) {{ 0, 0, ctx->width, ctx->height }});
   
   xcb_poly_fill_rectangle(ctx->con,
                           ctx->pm,
@@ -61,20 +62,20 @@ static int update_text(struct textbox *ctx, const char *str) {
  
   xft_draw_text(ctx->fdrw, 0, 0, str, nchars);
   
-  xcb_flush(ctx->con);
-  XFlush(ctx->dpy);
-  
   xcb_copy_area(ctx->con, ctx->pm, ctx->win, ctx->gc, 0, 0, 0, 0, ctx->width, ctx->height);
+  XFlush(ctx->dpy);
   xcb_flush(ctx->con);
   
   return nchars;
 }
   
 struct textbox *textbox_init(Display *dpy,
+                             xcb_window_t parent,
                              int x, int y,
                              const char *fgcol,
                              const char *bgcol,
                              const char *font,
+                             const char *prompt,
                              int width,
                              int fill) {
   
@@ -106,7 +107,7 @@ struct textbox *textbox_init(Display *dpy,
   xcb_create_window(ctx->con,
                     XCB_COPY_FROM_PARENT,
                     ctx->win,
-                    screen->root,
+                    parent,
                     x, y,
                     width, 1,
                     0,
@@ -118,7 +119,7 @@ struct textbox *textbox_init(Display *dpy,
                         XCB_EVENT_MASK_KEY_PRESS |
                         XCB_EVENT_MASK_FOCUS_CHANGE});
   
-  xcb_create_gc(ctx->con, ctx->gc, screen->root,
+  xcb_create_gc(ctx->con, ctx->gc, parent,
                 XCB_GC_FOREGROUND |
                 XCB_GC_BACKGROUND |
                 XCB_GC_FILL_STYLE,
@@ -173,9 +174,22 @@ struct textbox *textbox_init(Display *dpy,
   return ctx;
 }
 
+static void hide_window(struct textbox *ctx) {
+  xcb_copy_area(ctx->con,
+                ctx->opm,
+                ctx->win,
+                ctx->gc,
+                0, 0, 0, 0,
+                ctx->width,
+                ctx->height);
+  
+  xcb_unmap_window(ctx->con, ctx->win);
+  xcb_flush(ctx->con);
+}
+
 static void grab_kbd(xcb_connection_t *con, xcb_window_t win) {
   xcb_grab_keyboard_reply_t *r;
-  xcb_generic_error_t *err = NULL;
+    xcb_generic_error_t *err = NULL;
   r = xcb_grab_keyboard_reply(con, xcb_grab_keyboard(con,
                                                      0,
                                                      win,
@@ -193,32 +207,18 @@ static void grab_kbd(xcb_connection_t *con, xcb_window_t win) {
   }
 }
 
-static void release_kbd(struct textbox *ctx) {
-  xcb_flush(ctx->con);
-}
 
-static void hide_window(struct textbox *ctx) {
-  xcb_copy_area(ctx->con,
-                ctx->opm,
-                ctx->win,
-                ctx->gc,
-                0, 0, 0, 0,
-                ctx->width,
-                ctx->height);
-  
-  release_kbd(ctx);
-  xcb_unmap_window(ctx->con, ctx->win);
-  xcb_flush(ctx->con);
-}
-
-static int evloop(struct textbox *ctx, char *buf, int grab_keyboard) {
+static int evloop(struct textbox *ctx,
+                  char *buf,
+                  void (*expose_cb)(struct xcb_expose_event_t *ev),
+                  int grab_keyboard) {
   struct keymap *keymap;
   xcb_generic_event_t *ev;
   
   xcb_map_window(ctx->con, ctx->win);
-  xcb_flush(ctx->con);
   if(grab_keyboard)
     grab_kbd(ctx->con, ctx->win);
+  xcb_flush(ctx->con);
   update_text(ctx, "");
   
   keymap = get_keymap(ctx->con);
@@ -227,6 +227,7 @@ static int evloop(struct textbox *ctx, char *buf, int grab_keyboard) {
   while((ev = xcb_wait_for_event(ctx->con))) {
     const char *c;
     const char *keyname;
+    int len;
     
     
     switch(ev->response_type) {
@@ -238,6 +239,7 @@ static int evloop(struct textbox *ctx, char *buf, int grab_keyboard) {
         
         if(!keyname)
           continue;
+        len = strlen(keyname);
         if(!strcmp(keyname, "BackSpace")) {
           buf[strlen(buf) - 1] = '\0';
         } else if(!strcmp(keyname, "space")) {
@@ -250,6 +252,9 @@ static int evloop(struct textbox *ctx, char *buf, int grab_keyboard) {
         } else if(!strcmp(keyname, "Escape")) {
           hide_window(ctx);
           return -1;
+        } else if(len == 2 && keyname[0] == 'F') {
+          hide_window(ctx);
+          return keyname[1] & 0xF;
         } else if(strlen(keyname) == 1) {
           c = key_name(keymap,
                        ((xcb_key_press_event_t*)ev)->detail,
@@ -269,16 +274,29 @@ static int evloop(struct textbox *ctx, char *buf, int grab_keyboard) {
           }
         }
         
-        buf[update_text(ctx, buf)] = '\0';
+        int printed = update_text(ctx, buf);
+        buf[printed] = '\0';
+        break;
+      case XCB_EXPOSE:
+        if(expose_cb)
+            expose_cb((struct xcb_expose_event_t*)ev);
+        update_text(ctx, buf);
+        xcb_flush(ctx->con);
+        break;
     }
   }
   return -1;
 } 
 
-char *textbox_query(struct textbox *ctx, int grab_keyboard) {
+char *textbox_query(struct textbox *ctx, int *fn, void (*expose_cb)(struct xcb_expose_event_t *ev), int grab_keyboard) {
+  int r;
   char *buf = malloc(sizeof(char) * 1024);
   
-  if(evloop(ctx, buf, grab_keyboard)) {
+  if(fn) *fn = 0;
+  r = evloop(ctx, buf, expose_cb, grab_keyboard);
+  if(fn) *fn = r;
+  
+  if(r) {
     free(buf);
     return NULL;
   }

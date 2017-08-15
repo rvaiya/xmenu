@@ -42,7 +42,7 @@
 #define die(fmt, ...) _die(fmt, ##__VA_ARGS__)
 #endif
 
-#define root_win(con) (xcb_setup_roots_iterator(xcb_get_setup(con)).data)
+#define screen(con) (xcb_setup_roots_iterator(xcb_get_setup(con)).data)
 
 xcb_screen_t *screen;
 xcb_connection_t *con;
@@ -198,7 +198,7 @@ static struct menu_ctx *menu_ctx(xcb_window_t win,
   size_t tboxh = textbox_height(dpy, font);
   struct menu_ctx *ctx = malloc(sizeof(struct menu_ctx));
   
-  struct geom root = win_geom(con, screen->root);
+  struct geom rootdim = win_geom(con, screen->root);
   
   ctx->rect_gc = rectgc(bgcol);
   ctx->font = xft_get_font_drw(dpy, win, font, fgcol);
@@ -219,17 +219,19 @@ static struct menu_ctx *menu_ctx(xcb_window_t win,
   ctx->items_sz = items_sz;
   
   el_height = ctx->font->maxheight + (2 * ctx->padding) + ctx->spacing;
-  maxwinh = root.height - tboxh;
+  maxwinh = rootdim.height - tboxh;
   
   ctx->last_search = NULL;
   ctx->page_sz = el_height * items_sz > maxwinh ? maxwinh / el_height : items_sz;
   ctx->winh = ctx->page_sz * el_height;
   
   ctx->qbox= textbox_init(dpy,
-                          root.width - width, ctx->winh,
+                          screen->root,
+                          rootdim.width - width, ctx->winh,
                           ctx->fgcol,
                           ctx->bgcol,
                           ctx->fontname,
+                          NULL,
                           width,
                           1);
   
@@ -441,7 +443,7 @@ static void isearch(struct menu_ctx *ctx,
     ctx->last_search = NULL;
   }
   
-  char *query = textbox_query(ctx->qbox, 0);
+  char *query = textbox_query(ctx->qbox, NULL, NULL, 0);
   
   if(!query) return;
 
@@ -827,15 +829,17 @@ struct options opt_parse(int *argc, char ***argv) {
 
 void prompt(char *str, struct cfg *cfg) {
   //TODO add prompt string to textbox.c
-  xcb_screen_t *root = root_win(con);
+  xcb_screen_t *screen = screen(con);
   struct textbox* tbox = textbox_init(dpy,
-                                      root->width_in_pixels - cfg->width, 0,
+                                      screen->root,
+                                      screen->width_in_pixels - cfg->width, 0,
                                       cfg->fgcol,
                                       cfg->bgcol,
                                       cfg->font,
+                                      NULL,
                                       cfg->width,
                                       1);
-  char *result = textbox_query(tbox, 1);
+  char *result = textbox_query(tbox, NULL, NULL, 1);
   printf(result);
 }
 
@@ -858,7 +862,7 @@ int main(int argc, char **argv) {
     return 0;
   } 
   else if(opt.print_version)
-    die("Version: "VERSION"\n");
+    die("Version: "VERSION"\n\nWritten By: Raheman Vaiya\n");
   else if(opt.print_help)
     help_die();
   else if(opt.print_config)
