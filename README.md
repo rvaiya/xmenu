@@ -23,11 +23,11 @@ environments of users of minimalist window managers.
 E.G
 
 ```
-ps aux|grep urxvt|xmenu|awk '{ print $2 }'|xargs kill
+ls ~/docs|xmenu|xargs zathura
 ```
 
-might be bound to a button which allows the user to selectively
-kill a terminal instance.
+might be bound to a key which allows the user to
+open a document.
 
 # Customization
 

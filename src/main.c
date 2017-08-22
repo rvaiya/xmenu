@@ -105,16 +105,34 @@ void grab_kbd(xcb_connection_t *con, xcb_window_t win) {
   }
 }
 
-static char *field(const char *str, char delim, int n) {
+void parse_field_range(const char *_str, int *lower, int *upper) {
+  char *str = strdup(_str);
+  char *sep = strchr(str, '-');
+  if(!sep) {
+    *lower = atoi(str);
+    *upper = *lower;
+    free(str);
+    return;
+  }
+  
+  *sep = '\0';
+  *lower = atoi(str);
+  *upper = atoi(sep+1);
+  if(*(sep + 1) == '\0')
+    *upper = INT_MAX;
+  free(str);
+}
+
+static char *fields(const char *str, char delim, int start, int end) {
   int c = 0;
   int i = 0;
   char *result = NULL;
   
   for(;*str;str++) {
-    if(c == (n-1)) {
+    if(c >= (start-1) && c <= (end-1)) {
       if(!result)
         result = malloc(strlen(str) + 1);
-      if(*str == delim) {
+      if(c == (end-1) && *str == delim) {
         result[i] = '\0';
         return result;
       }
@@ -123,7 +141,7 @@ static char *field(const char *str, char delim, int n) {
     if(*str == delim) c++;
   }
   
-  if(c == (n-1) && !result) {
+  if(c == (end-1) && !result) {
 	  result = malloc(1);
 	  *result = '\0';
   }
@@ -133,11 +151,12 @@ static char *field(const char *str, char delim, int n) {
   return result;
 }
 
-char **field_map(const char **items, size_t items_sz, char delim, int n) {
+
+char **field_map(const char **items, size_t items_sz, char delim, int start, int end) {
   char **result = malloc(sizeof(char*) * items_sz);
   size_t i;
   for (i = 0; i < items_sz; i++) {
-    result[i] = field(items[i], delim, n);
+    result[i] = fields(items[i], delim, start, end);
     if(!result[i]) {
       free(result);
       return NULL;
@@ -153,13 +172,13 @@ static void replace_tabs(char **oline) {
   char *start;
   line = *oline;
   
-  while(*line++)
+  for(;*line;line++)
     if(*line == '\t')
       n++;
   
   start = realloc(*oline, strlen(*oline) + n * 4 + 1);
   line = start;
-  while(*line++)
+  for(;*line;line++)
     if(*line == '\t') {
       memmove(line + 4, line + 1, strlen(line));
       memset(line, ' ', 4);
@@ -707,7 +726,13 @@ Arguments: \n\n\
 \
   -h: Prints this help message. \n\
   -c: Prints the current configuration parameters. \n\
-  -k: Prints a list of valid key names that can be used in the config file. \n\n\
+  -k: Prints a list of valid key names that can be used in the config file. \n\
+  -d: Specifies a record separator which allows specific portions of each line to \n\
+      be used as menu items. (similar to cut)\n\
+  -f: When used in conjunction with -d specifies which field to display. \n\
+      Note that the original line is output in its original form and \n\
+      can be further dissected by the likes of cut. Field ranges of the form
+      N-M are also supported. \n\n\
 "fmt, ##__VA_ARGS__);\
 } while(0)
 
@@ -769,7 +794,8 @@ struct options {
 
   char *prompt_str;
   char delim;
-  int field;
+  int field_lower;
+  int field_upper;
   FILE *file;
 };
 
@@ -802,7 +828,7 @@ struct options opt_parse(int *argc, char ***argv) {
         opt.delim = *optarg;
         break;
       case 'f':
-        opt.field = atoi(optarg);
+        parse_field_range(optarg, &opt.field_lower, &opt.field_upper);
         break;
       case '?':
         fprintf(stderr, "ERROR: Invalid option %c\n\n", optopt);
@@ -848,7 +874,7 @@ int main(int argc, char **argv) {
   struct cfg *cfg;
   size_t nitems;
   const char **items;
-  const char **menu_items;
+  char **menu_items;
      
   strncpy(cfg_file, getenv("HOME"), 240);
   strcpy(cfg_file + strlen(cfg_file), "/.xmenurc");
@@ -871,10 +897,10 @@ int main(int argc, char **argv) {
     print_keynames();
    
   items = (const char**)read_items(&nitems, opt.file);
-  if(opt.delim && opt.field) {
-    menu_items = field_map(items, nitems, opt.delim, opt.field);
+  if(opt.delim && opt.field_upper) {
+    menu_items = field_map(items, nitems, opt.delim, opt.field_lower, opt.field_upper);
     if(!menu_items)
-        die("ERROR: Invalid input, all lines must have at least %d fields.\n", opt.field);
+      die("ERROR: Invalid input, all lines must have at least %d fields.\n", opt.field_upper);
   }
   else
     menu_items = items;
